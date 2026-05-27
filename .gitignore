@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MultiCom local data, outputs, and secrets
+.venv/
+venv/
+.env
+secrets/
+
+data/raw*/
+data/extracted*/
+data/*.csv
+data/*.tsv
+data/*.json
+data/*.zip
+
+artifacts/
+outputs/
+results/
+*.log

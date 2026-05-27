@@ -1,0 +1,21 @@
+# Example paths for the main MultiCom pipeline.
+#
+# Data are intentionally not included in this repository.
+raw_community_notes_dir: data/raw_communitynotes
+extracted_community_notes_dir: data/extracted_communitynotes
+evaluation_csv: data/eval_notes.csv
+cluster_summary_csv: data/cluster_summary_k16.csv
+personas_csv: artifacts/personas.csv
+run_dir: artifacts/main_run
+agent_votes_csv: artifacts/main_run/agent_votes.csv
+
+model: gpt-5.4-nano
+base_url: https://api.openai.com/v1
+temperature: 0.7
+max_tokens: 420
+concurrency: 8
+max_retries: 3
+num_persona_agents: 16
+outer_folds: 5
+inner_folds: 4
+seed: 42
