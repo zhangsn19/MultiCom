@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--notes", type=Path, required=True, help="Evaluation CSV with noteId, post_text, note_text, and true labels.")
     parser.add_argument("--personas", type=Path, required=True, help="CSV from multicom.personas.")
     parser.add_argument("--out", type=Path, default=Path("artifacts/agent_votes.csv"))
-    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-5.4-nano"))
+    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-5.1"))
     parser.add_argument("--base-url", default=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max-tokens", type=int, default=420)

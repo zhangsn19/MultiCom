@@ -9,7 +9,7 @@ personas_csv: artifacts/personas.csv
 run_dir: artifacts/main_run
 agent_votes_csv: artifacts/main_run/agent_votes.csv
 
-model: gpt-5.4-nano
+model: gpt-5.1
 base_url: https://api.openai.com/v1
 temperature: 0.7
 max_tokens: 420
@@ -17,5 +17,5 @@ concurrency: 8
 max_retries: 3
 num_persona_agents: 16
 outer_folds: 5
-inner_folds: 4
+inner_folds: 5
 seed: 42

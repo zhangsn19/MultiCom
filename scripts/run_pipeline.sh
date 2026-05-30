@@ -15,7 +15,7 @@ python -m multicom.agent_rating \
   --notes data/eval_notes.csv \
   --personas artifacts/personas.csv \
   --out artifacts/main_run/agent_votes.csv \
-  --model "${OPENAI_MODEL:-gpt-5.4-nano}" \
+  --model "${OPENAI_MODEL:-gpt-5.1}" \
   --temperature "${MULTICOM_TEMPERATURE:-0.7}" \
   --max-tokens "${MULTICOM_MAX_TOKENS:-420}" \
   --concurrency "${MULTICOM_CONCURRENCY:-8}" \
@@ -25,5 +25,5 @@ python -m multicom.oof_aggregation \
   --run-dir artifacts/main_run \
   --out-dir artifacts/main_run/oof_aggregation \
   --folds "${MULTICOM_OUTER_FOLDS:-5}" \
-  --inner-folds "${MULTICOM_INNER_FOLDS:-4}" \
+  --inner-folds "${MULTICOM_INNER_FOLDS:-5}" \
   --seed "${MULTICOM_SEED:-42}"

@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True, help="Directory containing agent_votes.csv and pilot_notes.csv.")
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--folds", type=int, default=5)
-    parser.add_argument("--inner-folds", type=int, default=4)
+    parser.add_argument("--inner-folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
@@ -54,24 +54,40 @@ def align_prob(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
     return out
 
 
-def choose_spec(X_train: pd.DataFrame, y_train: np.ndarray, inner_folds: int, seed: int) -> tuple[float, object]:
+def apply_thresholds(prob: np.ndarray, thresholds: tuple[float, float, float]) -> np.ndarray:
+    adjusted = prob / np.asarray(thresholds, dtype=float)
+    return adjusted.argmax(axis=1).astype(int)
+
+
+def choose_spec(X_train: pd.DataFrame, y_train: np.ndarray, inner_folds: int, seed: int) -> tuple[float, object, tuple[float, float, float]]:
     c_grid = [0.03, 0.1, 0.3, 1.0, 3.0]
     weight_grid: list[object] = [None, "balanced", {0: 1.0, 1: 1.15, 2: 1.0}]
+    threshold_grid = [
+        (1.0, 1.0, 1.0),
+        (0.95, 1.0, 0.95),
+        (1.05, 1.0, 1.05),
+        (1.0, 0.95, 1.0),
+        (1.0, 1.05, 1.0),
+        (0.95, 1.05, 0.95),
+        (1.05, 0.95, 1.05),
+    ]
     inner = StratifiedKFold(n_splits=inner_folds, shuffle=True, random_state=seed)
     best = None
     for c in c_grid:
         for weight in weight_grid:
-            oof = np.zeros(len(y_train), dtype=int)
+            oof_prob = np.zeros((len(y_train), 3), dtype=float)
             for tr, va in inner.split(X_train, y_train):
                 model = make_lr(c, weight, seed)
                 model.fit(X_train.iloc[tr], y_train[tr])
-                oof[va] = model.predict(X_train.iloc[va])
-            m = classification_metrics(y_train, oof)
-            key = (m["balanced_accuracy"], m["accuracy"], m["min_recall"], -m["cross_error"])
-            if best is None or key > best[0]:
-                best = (key, c, weight)
+                oof_prob[va] = align_prob(model, X_train.iloc[va])
+            for thresholds in threshold_grid:
+                oof = apply_thresholds(oof_prob, thresholds)
+                m = classification_metrics(y_train, oof)
+                key = (m["balanced_accuracy"], m["accuracy"], m["min_recall"], -m["cross_error"])
+                if best is None or key > best[0]:
+                    best = (key, c, weight, thresholds)
     assert best is not None
-    return best[1], best[2]
+    return best[1], best[2], best[3]
 
 
 def nested_oof(df: pd.DataFrame, cols: list[str], folds: int, inner_folds: int, seed: int) -> tuple[np.ndarray, np.ndarray, list[dict]]:
@@ -82,16 +98,17 @@ def nested_oof(df: pd.DataFrame, cols: list[str], folds: int, inner_folds: int, 
     rows = []
     outer = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     for fold, (tr, te) in enumerate(outer.split(X, y), start=1):
-        c, weight = choose_spec(X.iloc[tr].reset_index(drop=True), y[tr], inner_folds, seed + fold)
+        c, weight, thresholds = choose_spec(X.iloc[tr].reset_index(drop=True), y[tr], inner_folds, seed + fold)
         model = make_lr(c, weight, seed + fold)
         model.fit(X.iloc[tr], y[tr])
-        pred[te] = model.predict(X.iloc[te])
         prob[te] = align_prob(model, X.iloc[te])
+        pred[te] = apply_thresholds(prob[te], thresholds)
         rows.append(
             {
                 "fold": fold,
                 "c": c,
                 "class_weight": json.dumps(weight) if isinstance(weight, dict) else (weight or "none"),
+                "decision_thresholds": json.dumps(thresholds),
                 **{f"test_{k}": v for k, v in classification_metrics(y[te], pred[te]).items()},
             }
         )
@@ -107,8 +124,8 @@ def weighted_vote(matrix: np.ndarray, weights: list[float]) -> np.ndarray:
 
 
 def final_hard_ensemble(df: pd.DataFrame) -> np.ndarray:
-    anchors = df[["summary_meta", "summary_meta_struct", "full_meta", "blend"]].to_numpy(dtype=int)
-    pred = weighted_vote(anchors, [1.0, 0.75, 1.0, 2.0])
+    anchors = df[["oof_ensemble_weighted", "oof_ensemble_gated", "xstyle_rescue_gate", "blend", "full_meta"]].to_numpy(dtype=int)
+    pred = weighted_vote(anchors, [1.0, 0.75, 0.75, 2.0, 1.0])
     vote_nmr_share = df["vote_somewhat_helpful"].to_numpy(dtype=float) / df["n_votes"].clip(lower=1).to_numpy(dtype=float)
     mean_under = df["mean_changes_reader_understanding"].to_numpy(dtype=float)
     promote = (
@@ -120,6 +137,33 @@ def final_hard_ensemble(df: pd.DataFrame) -> np.ndarray:
     )
     pred[promote] = df.loc[promote, "blend"].to_numpy(dtype=int)
     return pred
+
+
+def build_oof_anchors(df: pd.DataFrame, predictions: pd.DataFrame) -> pd.DataFrame:
+    predictions = predictions.copy()
+    predictions["oof_ensemble_weighted"] = weighted_vote(
+        predictions[["summary_meta", "summary_meta_struct", "full_meta", "blend"]].to_numpy(dtype=int),
+        [1.0, 0.75, 1.0, 2.0],
+    )
+
+    entropy = df["raw_vote_entropy"].to_numpy(dtype=float)
+    confidence = df["mean_confidence"].to_numpy(dtype=float)
+    stable_panel = (entropy <= np.nanmedian(entropy)) & (confidence >= np.nanmedian(confidence))
+    predictions["oof_ensemble_gated"] = predictions["blend"].to_numpy(dtype=int)
+    predictions.loc[stable_panel, "oof_ensemble_gated"] = predictions.loc[stable_panel, "summary_meta_struct"].to_numpy(dtype=int)
+
+    vote_nmr_share = df["vote_somewhat_helpful"].to_numpy(dtype=float) / df["n_votes"].clip(lower=1).to_numpy(dtype=float)
+    mean_under = df["mean_changes_reader_understanding"].to_numpy(dtype=float)
+    rescue = (
+        (predictions["oof_ensemble_gated"].to_numpy(dtype=int) == 1)
+        & (predictions["blend"].to_numpy(dtype=int) == predictions["summary_meta_struct"].to_numpy(dtype=int))
+        & (predictions["blend"].to_numpy(dtype=int) != 1)
+        & (vote_nmr_share >= 0.5625)
+        & (mean_under <= 29.79375)
+    )
+    predictions["xstyle_rescue_gate"] = predictions["oof_ensemble_gated"].to_numpy(dtype=int)
+    predictions.loc[rescue, "xstyle_rescue_gate"] = predictions.loc[rescue, "blend"].to_numpy(dtype=int)
+    return predictions
 
 
 def main() -> int:
@@ -157,7 +201,25 @@ def main() -> int:
     predictions["blend"] = blend_prob.argmax(axis=1)
     summary_rows.append({"method": "blend", "n_features": -1, **classification_metrics(y, predictions["blend"].to_numpy(int))})
 
-    working = df.merge(predictions[["noteId", "summary_meta", "summary_meta_struct", "full_meta", "blend"]], on="noteId", how="left")
+    predictions = build_oof_anchors(df, predictions)
+    for name in ["oof_ensemble_weighted", "oof_ensemble_gated", "xstyle_rescue_gate"]:
+        summary_rows.append({"method": name, "n_features": -1, **classification_metrics(y, predictions[name].to_numpy(int))})
+
+    working = df.merge(
+        predictions[
+            [
+                "noteId",
+                "summary_meta_struct",
+                "full_meta",
+                "blend",
+                "oof_ensemble_weighted",
+                "oof_ensemble_gated",
+                "xstyle_rescue_gate",
+            ]
+        ],
+        on="noteId",
+        how="left",
+    )
     final_pred = final_hard_ensemble(working)
     predictions["multicom_final"] = final_pred
     summary_rows.append({"method": "multicom_final", "n_features": -1, **classification_metrics(y, final_pred)})
@@ -191,4 +253,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
